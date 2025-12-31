@@ -120,7 +120,14 @@ async def handle_rpc(message: str) -> str:
 # ------------------------------------------------------------------
 # WebSocket connection handler – line-delimited JSON.
 # ------------------------------------------------------------------
-async def ws_handler(ws, path):
+from typing import Any
+
+async def ws_handler(ws: Any, path: str | None = None):
+    # `path` is ignored – required by the websockets API
+    async for raw_msg in ws:
+        reply = await handle_rpc(raw_msg)
+        # Append newline so client can split on lines.
+        await ws.send(reply + "\n")
     async for raw_msg in ws:
         reply = await handle_rpc(raw_msg)
         # Append newline so the client can split on lines.
@@ -142,6 +149,7 @@ def start_ws_server():
 
     async def _run():
         # This coroutine runs inside the event loop we create below.
+        # Bind to the configured HOST and PORT. If the port is already in use, an OSError will be raised.
         server = await websockets.serve(ws_handler, HOST, PORT)
         print(f"[blender‑rpc] listening on ws://{HOST}:{PORT}")
         try:
