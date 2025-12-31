@@ -38,6 +38,39 @@ This repository contains a minimal example of how to control a local Blender ins
 
 ## Running Tests
 
+## Connecting via MCP
+
+The server implements a **JSON‑RPC 2.0** interface over WebSockets, which is compatible with any MCP (Message Control Protocol) client that can speak JSON‑RPC. To connect:
+
+```python
+import asyncio, websockets, json
+
+async def main():
+    async with websockets.connect('ws://127.0.0.1:8765') as ws:
+        # Handshake – ask the server what methods are available
+        await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "describe", "params": {}}) + "\n")
+        describe_resp = await ws.recv()
+        print('Server description:', json.loads(describe_resp))
+
+        # Example – execute arbitrary Python code inside Blender
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "execute",
+            "params": {"code": "import bpy; result = 'Hello from Blender'"}
+        }
+        await ws.send(json.dumps(payload) + "\n")
+        exec_resp = await ws.recv()
+        print('Execute response:', json.loads(exec_resp))
+
+asyncio.run(main())
+```
+
+Replace the `code` string with any Python you wish to run inside Blender (subject to the whitelist defined in `blender_rpc_ws.py`). The response will contain a `result` field if your script defines a variable named `result`. This example works with any MCP‑compatible client that can open a WebSocket and exchange line‑delimited JSON‑RPC messages.
+
+## Running Tests
+
+
 You can run the unit tests for this project using **pytest**. The repository includes a virtual environment with the required dependencies listed in `requirements.txt`.
 
 ```bash

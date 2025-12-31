@@ -137,7 +137,13 @@ async def ws_handler(ws: Any, path: str | None = None):
 # Server bootstrap (runs in its own thread so Blender UI stays responsive).
 # ------------------------------------------------------------------
 def start_ws_server():
-    """Start the WebSocket server – works both in a daemon thread or foreground."""
+    """Start the WebSocket server in its own event loop.
+    The created ``_ws_server`` and ``_ws_loop`` globals are stored so that
+    :func:`stop_ws_server` can shut them down when the add‑on is disabled.
+    """
+    global _ws_server, _ws_loop
+    _ws_server = None
+    _ws_loop = None
     # Import websockets lazily; give a clear error if missing.
     try:
         import websockets  # noqa: F401
@@ -147,25 +153,54 @@ def start_ws_server():
             "Install it with: pip install websockets"
         ) from e
 
-    async def _run():
-        # This coroutine runs inside the event loop we create below.
-        # Bind to the configured HOST and PORT. If the port is already in use, an OSError will be raised.
-        server = await websockets.serve(ws_handler, HOST, PORT)
+    async def _start_server():
+        # Create the server and store it in a global variable.
+        global _ws_server
+        _ws_server = await websockets.serve(ws_handler, HOST, PORT)
         print(f"[blender‑rpc] listening on ws://{HOST}:{PORT}")
-        try:
-            await asyncio.Future()  # keep running forever until cancelled
-        finally:
-            server.close()
-            await server.wait_closed()
+        # Keep the coroutine alive while the event loop runs.
+        await asyncio.Future()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Set up a dedicated event loop for the server (runs in this thread).
+    _ws_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_ws_loop)
+    # Schedule the server start and then run the loop forever.
+    _ws_loop.create_task(_start_server())
     try:
-        loop.run_until_complete(_run())
+        _ws_loop.run_forever()
     finally:
-        loop.close()
+        # Clean shutdown if the loop exits unexpectedly.
+        if _ws_server is not None:
+            _ws_loop.run_until_complete(_ws_server.wait_closed())
+        _ws_loop.close()
+
+    
 
 # ------------------------------------------------------------------
+# Server shutdown helper
+
+def stop_ws_server():
+    """Stop the running WebSocket server if it exists.
+    Called from the add‑on's ``unregister`` function.
+    """
+    global _ws_server, _ws_loop
+    if _ws_server is None or _ws_loop is None:
+        print("[blender‑rpc] No WS server to stop.")
+        return
+    # Close the server and stop the event loop safely.
+    async def _shutdown():
+        if _ws_server is not None:
+            _ws_server.close()
+            await _ws_server.wait_closed()
+    try:
+        # Schedule shutdown coroutine on the server's own loop.
+        asyncio.run_coroutine_threadsafe(_shutdown(), _ws_loop)
+        # Stop the loop after pending callbacks finish.
+        _ws_loop.call_soon_threadsafe(_ws_loop.stop)
+        print("[blender‑rpc] WS server stopped.")
+    except Exception as e:
+        print(f"[blender‑rpc] Error stopping WS server: {e}")
+
 # Entry point
 # ------------------------------------------------------------------
 if __name__ == "__main__":
