@@ -65,22 +65,22 @@ async def handle_rpc(message: str) -> str:
                 },
             }
 
-        # --------------------------------------------------------------
+# --------------------------------------------------------------
         # 2️⃣ Core method – “execute”
         # --------------------------------------------------------------
-elif req["method"] == "execute":
-             code = req["params"]["code"]
-             local_ns: dict = {}
-             # Execute user supplied code
-             # NOTE: We know this is unsafe (for demo purposes right now)
-             exec(code, {}, local_ns)
+        elif req["method"] == "execute":
+            code = req["params"]["code"]
+            local_ns: dict = {}
+            # Execute user supplied code
+            # NOTE: We know this is unsafe (for demo purposes right now)
+            exec(code, {}, local_ns)
 
-             # If the script defines a variable called `result`, return it.
-             response = {
-                 "jsonrpc": "2.0",
-                 "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
-                 "result": local_ns.get("result")
-             }
+            # If the script defines a variable called `result`, return it.
+            response = {
+                "jsonrpc": "2.0",
+                "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
+                "result": local_ns.get("result")
+            }
 
         else:
             raise NotImplementedError(f"Method {req['method']} not supported")

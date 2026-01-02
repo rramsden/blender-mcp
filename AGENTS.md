@@ -2,7 +2,7 @@
 
 ## Build Instructions
 
-Always build this project using the Makefile:
+Always build this project using the Makefile. Do not use zip command from terminal.
 
 ```bash
 make
