@@ -123,3 +123,6 @@ cython_debug/
 
 # Blender add-on packages
 *.zip
+
+# Ingore tests scripts for now
+scripts/
