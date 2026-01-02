@@ -4,9 +4,9 @@ ADDON_NAME := blender_rpc_ws
 ZIP_NAME   := $(ADDON_NAME).zip
 SRC_FILES  := __init__.py blender_rpc_ws.py README.md
 
-all: $(ZIP_NAME)
+all: build
 
-$(ZIP_NAME):
+build:
 	@echo "▶ Building $(ZIP_NAME)…"
 	@rm -rf tmp_pkg
 	@mkdir -p tmp_pkg/$(ADDON_NAME)
@@ -27,7 +27,7 @@ test:
 	@echo "▶ Running pytest tests…"
 	@python3 -m pytest tests/ -v
 
-check: clean lint test $(ZIP_NAME)
+check: lint test build clean
 	@echo "✅ All checks passed: linting, testing, and build completed successfully."
 
 clean:
