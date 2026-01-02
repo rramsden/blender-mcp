@@ -19,9 +19,9 @@ from typing import Any
 # ------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------
-HOST = "0.0.0.0"          # bind address; all interfaces
-PORT = 8765                 # TCP port for the WebSocket server
-ALLOWED_MODULES = {"bpy"}   # whitelist of modules that user code may import/use
+HOST = "0.0.0.0"  # bind address; all interfaces
+PORT = 8765  # TCP port for the WebSocket server
+ALLOWED_MODULES = {"bpy"}  # whitelist of modules that user code may import/use
 
 
 # ------------------------------------------------------------------
@@ -53,9 +53,9 @@ async def handle_rpc(message: str) -> str:
                                 "Run arbitrary Python code that can use the bpy module."
                             ),
                             "params": {"code": "string"},
-                            "returns": "any JSON-serialisable value"
+                            "returns": "any JSON-serialisable value",
                         }
-                    ]
+                    ],
                 },
             }
 
@@ -69,6 +69,7 @@ async def handle_rpc(message: str) -> str:
             # Capture stdout by redirecting it
             import io
             import sys
+
             old_stdout = sys.stdout
             captured_output = io.StringIO()
             sys.stdout = captured_output
@@ -84,13 +85,33 @@ async def handle_rpc(message: str) -> str:
             finally:
                 # Restore stdout
                 sys.stdout = old_stdout
-            
-            # If the script defines a variable called `result`, return it.
+
+            # Determine what to return as the RPC result.
+            # If the executed script defined a variable named `result`, use it.
+            # Otherwise fall back to the captured stdout (stripped of trailing newlines).
+            if local_ns.get("result") is None:
+                stripped = output.strip()
+                try:
+                    result_value = json.loads(stripped)
+                except Exception:
+                    result_value = stripped if stripped != "" else None
+            else:
+                result_value = local_ns.get("result")
+
+            # Optional debugging flag – if the request includes "debug": true, include extra info.
+            debug_info = {}
+            if isinstance(req, dict) and req.get("debug"):
+                debug_info = {
+                    "captured_stdout": output,
+                    "locals": local_ns,
+                }
+
             response = {
                 "jsonrpc": "2.0",
                 "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
-                "result": local_ns.get("result"),
-                "output": output
+                "result": result_value,
+                "output": output,
+                "debug": debug_info,
             }
 
         else:
@@ -102,7 +123,7 @@ async def handle_rpc(message: str) -> str:
             "jsonrpc": "2.0",
             "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
             "error": {
-                "code": -32603,                     # Internal error
+                "code": -32603,  # Internal error
                 "message": str(exc),
                 "data": traceback.format_exc(),
             },
@@ -180,6 +201,7 @@ def stop_ws_server():
         if _ws_server is not None:
             _ws_server.close()
             await _ws_server.wait_closed()
+
     try:
         # Schedule shutdown coroutine on the server's own loop.
         asyncio.run_coroutine_threadsafe(_shutdown(), _ws_loop)
@@ -198,8 +220,7 @@ if __name__ == "__main__":
         import websockets  # noqa: F401
     except Exception as e:
         raise RuntimeError(
-            "Missing dependency. Install it with:\n"
-            "   pip install --user websockets"
+            "Missing dependency. Install it with:\n   pip install --user websockets"
         ) from e
 
     # Run the server in the foreground (blocks until Ctrl‑C)
