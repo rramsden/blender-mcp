@@ -15,9 +15,25 @@ This will:
 2. Package all necessary files into `blender_rpc_ws.zip`
 3. Ensure proper structure for Blender add-on installation
 
+## Verification
+
+After making changes, always run the comprehensive verification:
+
+```bash
+make check
+```
+
+This command performs a comprehensive verification of your changes by executing the following steps in order:
+1. Clean the build environment
+2. Run linting to check code quality
+3. Execute all pytest tests 
+4. Build the final Blender add-on zip file
+
+**Important**: Any agent must run `make check` after editing any file to ensure that changes are properly validated before being considered complete. This command guarantees that your code is clean, properly linted, fully tested, and packaged correctly for deployment.
+
 ## Linting
 
-Always run the linter after modifying code to check for errors:
+When working with Python code, always run the linter after modifying code to check for errors:
 
 ```bash
 make lint
@@ -29,17 +45,7 @@ For automatic fixing of linting issues, you can also run:
 make lint-fix
 ```
 
-Note: This project uses ruff for linting. The linting target will check all Python files in the project. Some pre-existing linting issues may be present in the codebase, but the specific errors that were originally reported have been fixed.
-
-## Testing
-
-Always run the test suite after making changes to verify functionality:
-
-```bash
-make test
-```
-
-This will execute all pytest tests in the tests directory with verbose output.
+**Important**: If linting fails, run `make lint-fix` first to automatically fix common issues, then run `make lint` again to verify the fixes. This project uses ruff for linting. The linting target will check all Python files in the project. Some pre-existing linting issues may be present in the codebase, but the specific errors that were originally reported have been fixed.
 
 ## Check Command
 
@@ -49,13 +55,13 @@ Run all verification steps in sequence:
 make check
 ```
 
-This will:
+This command performs a comprehensive verification of your changes by executing the following steps in order:
 1. Clean the build environment
 2. Run linting to check code quality
 3. Execute all pytest tests 
 4. Build the final Blender add-on zip file
 
-The check command is ideal for verifying that your changes are ready for deployment or before committing code. It ensures that your code is clean, properly linted, fully tested, and ready for deployment.
+**Important**: Any agent must run `make check` after editing any file to ensure that changes are properly validated before being considered complete. This command guarantees that your code is clean, properly linted, fully tested, and packaged correctly for deployment.
 
 ## Troubleshooting
 
