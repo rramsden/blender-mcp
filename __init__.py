@@ -10,6 +10,7 @@ bl_info = {
 
 import importlib.util
 import os
+import threading
 
 # Load the implementation script that lives alongside this file
 module_path = os.path.abspath(
@@ -23,19 +24,20 @@ if spec is None or spec.loader is None:
 _main = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_main)
 
+
 def register():
     """Called by Blender when the add‑on is enabled.
     Starts the RPC server in a background thread and prints debug info.
     """
     print("[blender‑rpc] Register called – starting WebSocket server…")
     try:
-        import threading
         # start_ws_server blocks, so run it in a daemon thread
         t = threading.Thread(target=_main.start_ws_server, daemon=True)
         t.start()
         print("[blender‑rpc] Server thread started.")
     except Exception as e:
         raise RuntimeError(f"Failed to start WS server: {e}")
+
 
 def unregister():
     """Called by Blender when the add‑on is disabled."""

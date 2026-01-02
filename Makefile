@@ -15,9 +15,13 @@ $(ZIP_NAME):
 	@rm -rf tmp_pkg
 	@echo "✅ $(ZIP_NAME) created."
 
+lint:
+	@echo "▶ Running flake8 linting…"
+	@python3 -m flake8
+
 clean:
 	@rm -f $(ZIP_NAME) *.zip || true
 	@rm -rf tmp_pkg blender_rpc_ws || true
 	@echo "🧹 Cleaned up."
 
-.PHONY: all clean
+.PHONY: all clean lint

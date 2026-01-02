@@ -13,6 +13,16 @@ This will:
 2. Package all necessary files into `blender_rpc_ws.zip`
 3. Ensure proper structure for Blender add-on installation
 
+## Linting
+
+To check code style and linting issues, run:
+
+```bash
+make lint
+```
+
+Note: This project uses flake8 for linting. The linting target will check all Python files in the project. Some pre-existing linting issues may be present in the codebase, but the specific errors that were originally reported have been fixed.
+
 ## Usage
 
 1. Install the generated `blender_rpc_ws.zip` file in Blender

@@ -10,9 +10,10 @@ import websockets
 # Import the server module (it will not start automatically)
 from ..blender_rpc_ws import start_ws_server, HOST, PORT
 
+
 @pytest.fixture(scope="module")
 def run_server():
-    """Start the WebSocket server in a background thread for the duration of the tests."""
+    """Start the WebSocket server in a background thread for the duration of tests."""
     # Launch server thread (daemon so it exits when process ends)
     t = threading.Thread(target=start_ws_server, daemon=True)
     t.start()
@@ -20,6 +21,7 @@ def run_server():
     time.sleep(0.5)
     yield
     # No explicit shutdown – daemon thread will stop on exit
+
 
 @pytest.mark.asyncio
 async def test_describe(run_server):
@@ -33,6 +35,7 @@ async def test_describe(run_server):
         # ensure execute method is advertised
         names = [m["name"] for m in resp["result"]["methods"]]
         assert "execute" in names
+
 
 @pytest.mark.asyncio
 async def test_execute_simple(run_server):

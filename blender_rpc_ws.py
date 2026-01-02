@@ -15,12 +15,7 @@ import json
 import asyncio
 import traceback
 import threading
-
-# Optional import – needed only when the server runs.
-try:
-    import websockets  # noqa: F401
-except Exception:
-    websockets = None
+from typing import Any
 
 
 # ------------------------------------------------------------------
@@ -65,21 +60,38 @@ async def handle_rpc(message: str) -> str:
                 },
             }
 
-# --------------------------------------------------------------
+        # --------------------------------------------------------------
         # 2️⃣ Core method – “execute”
         # --------------------------------------------------------------
         elif req["method"] == "execute":
             code = req["params"]["code"]
             local_ns: dict = {}
-            # Execute user supplied code
-            # NOTE: We know this is unsafe (for demo purposes right now)
-            exec(code, {}, local_ns)
-
+            
+            # Capture stdout by redirecting it
+            import io
+            import sys
+            old_stdout = sys.stdout
+            captured_output = io.StringIO()
+            sys.stdout = captured_output
+            
+            try:
+                # Execute user supplied code
+                # NOTE: We know this is unsafe (for demo purposes right now)
+                exec(code, {}, local_ns)
+                
+                # Get captured output
+                output = captured_output.getvalue()
+                
+            finally:
+                # Restore stdout
+                sys.stdout = old_stdout
+            
             # If the script defines a variable called `result`, return it.
             response = {
                 "jsonrpc": "2.0",
                 "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
-                "result": local_ns.get("result")
+                "result": local_ns.get("result"),
+                "output": output
             }
 
         else:
@@ -99,21 +111,17 @@ async def handle_rpc(message: str) -> str:
 
     return json.dumps(response)
 
+
 # ------------------------------------------------------------------
 # WebSocket connection handler – line-delimited JSON.
 # ------------------------------------------------------------------
-from typing import Any
-
 async def ws_handler(ws: Any, path: str | None = None):
     # `path` is ignored – required by the websockets API
     async for raw_msg in ws:
         reply = await handle_rpc(raw_msg)
         # Append newline so client can split on lines.
         await ws.send(reply + "\n")
-    async for raw_msg in ws:
-        reply = await handle_rpc(raw_msg)
-        # Append newline so the client can split on lines.
-        await ws.send(reply + "\n")
+
 
 # ------------------------------------------------------------------
 # Server bootstrap (runs in its own thread so Blender UI stays responsive).
@@ -156,20 +164,19 @@ def start_ws_server():
             _ws_loop.run_until_complete(_ws_server.wait_closed())
         _ws_loop.close()
 
-    
 
 # ------------------------------------------------------------------
 # Server shutdown helper
-
+# ------------------------------------------------------------------
 def stop_ws_server():
     """Stop the running WebSocket server if it exists.
     Called from the add‑on's ``unregister`` function.
     """
-    global _ws_server, _ws_loop
     if _ws_server is None or _ws_loop is None:
         print("[blender‑rpc] No WS server to stop.")
         return
     # Close the server and stop the event loop safely.
+
     async def _shutdown():
         if _ws_server is not None:
             _ws_server.close()
@@ -182,6 +189,7 @@ def stop_ws_server():
         print("[blender‑rpc] WS server stopped.")
     except Exception as e:
         print(f"[blender‑rpc] Error stopping WS server: {e}")
+
 
 # Entry point
 # ------------------------------------------------------------------

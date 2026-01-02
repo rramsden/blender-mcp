@@ -16,7 +16,8 @@ The client will:
 4. Return the results to stdout
 
 Example usage:
-    echo "import bpy; bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))" | python3 blender_mcp_client.py
+    echo "import bpy; bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))" | 
+    python3 blender_mcp_client.py
 """
 
 import asyncio
@@ -25,11 +26,13 @@ import websockets
 import sys
 import os
 
+
 def get_blender_host():
     """Get the Blender host IP address from environment variable or default to Windows gateway."""
     # Try to get host from environment variable
     host = os.environ.get('BLENDER_HOST', '172.27.96.1')
     return host
+
 
 async def run_command(command):
     """Run a single command in Blender."""
@@ -57,6 +60,7 @@ async def run_command(command):
     except Exception as e:
         return f"Error executing command: {e}"
 
+
 async def main():
     """Main loop to read commands from stdin and execute them."""
     print("Blender MCP Client - Ready to execute commands", file=sys.stderr)
@@ -72,6 +76,7 @@ async def main():
         if command:
             result = await run_command(command)
             print(json.dumps({"result": result}))
+
 
 if __name__ == "__main__":
     asyncio.run(main())
