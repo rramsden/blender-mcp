@@ -40,6 +40,27 @@ This repository contains a minimal example of how to control a local Blender ins
 
 ## Connecting via MCP
 
+### Debugging the MCP client
+
+To get more insight when using the MCP client (`blender_mcp_client.py`), follow these steps:
+
+1. **Enable client‑side logging** – set the environment variable `DEBUG` to any value before running the client. The client will then echo the JSON request it sends and the raw response it receives.
+
+2. **Ask the server for debug information** – include the top‑level field `debug: true` in the JSON‑RPC request. When using the provided MCP client, prepend the request with `debug:true` (e.g., `debug:true; import bpy; bpy.ops.mesh.primitive_cube_add(location=(0,0,0))`). The server will add a `debug` section to its response containing the captured stdout and the local namespace.
+
+3. **Combine both** – set `DEBUG=1` and include the `debug:true` flag in the request to see both client‑side logs and the extra server‑side debugging details.
+
+**Example command**:
+
+```bash
+DEBUG=1 echo "debug:true; import bpy; bpy.ops.mesh.primitive_cube_add(location=(0,0,0))" |
+    python3 blender_mcp_client.py
+```
+
+These instructions let you troubleshoot code execution inside Blender without needing separate code snippets.
+
+
+
 The server implements a **JSON‑RPC 2.0** interface over WebSockets, which is compatible with any MCP (Message Control Protocol) client that can speak JSON‑RPC. To connect:
 
 ```python
