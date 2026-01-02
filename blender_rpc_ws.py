@@ -14,9 +14,7 @@
 import json
 import asyncio
 import traceback
-import threading
 from typing import Any
-
 
 # ------------------------------------------------------------------
 # Configuration
@@ -24,6 +22,7 @@ from typing import Any
 HOST = "0.0.0.0"          # bind address; all interfaces
 PORT = 8765                 # TCP port for the WebSocket server
 ALLOWED_MODULES = {"bpy"}   # whitelist of modules that user code may import/use
+
 
 # ------------------------------------------------------------------
 # JSON-RPC dispatcher
@@ -66,22 +65,22 @@ async def handle_rpc(message: str) -> str:
         elif req["method"] == "execute":
             code = req["params"]["code"]
             local_ns: dict = {}
-            
+
             # Capture stdout by redirecting it
             import io
             import sys
             old_stdout = sys.stdout
             captured_output = io.StringIO()
             sys.stdout = captured_output
-            
+
             try:
                 # Execute user supplied code
                 # NOTE: We know this is unsafe (for demo purposes right now)
                 exec(code, {}, local_ns)
-                
+
                 # Get captured output
                 output = captured_output.getvalue()
-                
+
             finally:
                 # Restore stdout
                 sys.stdout = old_stdout
