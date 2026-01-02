@@ -1,3 +1,7 @@
+import importlib.util
+import os
+import threading
+
 bl_info = {
     "name": "Blender RPC WebSocket",
     "author": "macki",
@@ -7,10 +11,6 @@ bl_info = {
     "description": "Expose a WebSocket RPC interface for external control.",
     "category": "Development",
 }
-
-import importlib.util
-import os
-import threading
 
 # Load the implementation script that lives alongside this file
 module_path = os.path.abspath(
