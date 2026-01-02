@@ -11,13 +11,15 @@ Usage:
 
 The client will:
 1. Connect to the Blender RPC server at ws://172.27.96.1:8765
-2. Accept commands from stdin (one command per line)
+2. Accept commands from stdin (one command per line) or from a file argument
 3. Execute the commands in Blender's Python environment
 4. Return the results to stdout
 
 Example usage:
     echo "import bpy; bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))" |
     python3 blender_mcp_client.py
+
+    python3 blender_mcp_client.py create_3d_cube_structure.py
 """
 
 import asyncio
@@ -25,20 +27,18 @@ import json
 import websockets
 import sys
 import os
+import argparse
 
 
 def get_blender_host():
-    """Return host, with optional debug output."""
-    host = os.environ.get("BLENDER_HOST", "172.27.96.1")
-    if os.environ.get("DEBUG"):
-        print(f"[DEBUG] Using Blender host: {host}", file=sys.stderr)
-    return host
     """
     Get the Blender host IP address from environment variable
     or default to Windows gateway.
     """
     # Try to get host from environment variable
     host = os.environ.get("BLENDER_HOST", "172.27.96.1")
+    if os.environ.get("DEBUG"):
+        print(f"[DEBUG] Using Blender host: {host}", file=sys.stderr)
     return host
 
 
@@ -68,20 +68,18 @@ async def run_command(command):
 
 
 async def main():
-    """Main loop to read commands from stdin and execute them."""
-    print("Blender MCP Client - Ready to execute commands", file=sys.stderr)
-    print("Enter Python commands (one per line) or 'quit' to exit", file=sys.stderr)
+    """Main loop to read commands from stdin or file and execute them."""
 
-    # Process commands from stdin
-    for line in sys.stdin:
-        command = line.strip()
+    content = ""
+    if len(sys.argv) > 1:
+        filename = sys.argv[1]
+        with open(filename, "r") as f:
+            content = f.read()
+    else:
+        content = sys.stdin.read()
 
-        if command.lower() == "quit":
-            break
-
-        if command:
-            result = await run_command(command)
-            print(json.dumps({"result": result}))
+    result = await run_command(content)
+    print(json.dumps({"result": result}))
 
 
 if __name__ == "__main__":
