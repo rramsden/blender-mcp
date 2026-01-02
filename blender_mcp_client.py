@@ -28,12 +28,17 @@ import os
 
 
 def get_blender_host():
+    """Return host, with optional debug output."""
+    host = os.environ.get("BLENDER_HOST", "172.27.96.1")
+    if os.environ.get("DEBUG"):
+        print(f"[DEBUG] Using Blender host: {host}", file=sys.stderr)
+    return host
     """
     Get the Blender host IP address from environment variable
     or default to Windows gateway.
     """
     # Try to get host from environment variable
-    host = os.environ.get('BLENDER_HOST', '172.27.96.1')
+    host = os.environ.get("BLENDER_HOST", "172.27.96.1")
     return host
 
 
@@ -49,9 +54,7 @@ async def run_command(command):
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "execute",
-                "params": {
-                    "code": command
-                }
+                "params": {"code": command},
             }
 
             await ws.send(json.dumps(execute_request) + "\n")
@@ -73,7 +76,7 @@ async def main():
     for line in sys.stdin:
         command = line.strip()
 
-        if command.lower() == 'quit':
+        if command.lower() == "quit":
             break
 
         if command:
