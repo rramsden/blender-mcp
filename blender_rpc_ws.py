@@ -31,25 +31,6 @@ PORT = 8765                 # TCP port for the WebSocket server
 ALLOWED_MODULES = {"bpy"}   # whitelist of modules that user code may import/use
 
 # ------------------------------------------------------------------
-# Build a safe globals dict – only whitelisted modules are exposed.
-# ------------------------------------------------------------------
-def make_safe_globals():
-    """Create a globals dict containing only whitelisted modules that are actually importable.
-    If a module (e.g., ``bpy``) cannot be imported because Blender is not running,
-    it is simply omitted – the server can still start and will raise an error
-    when user code tries to use the missing module.
-    """
-    safe = {}
-    for name in ALLOWED_MODULES:
-        try:
-            safe[name] = __import__(name)
-        except Exception:  # pragma: no cover – expected when bpy is absent
-            continue
-    return safe
-
-SAFE_GLOBALS = make_safe_globals()
-
-# ------------------------------------------------------------------
 # JSON-RPC dispatcher
 # ------------------------------------------------------------------
 async def handle_rpc(message: str) -> str:
@@ -89,9 +70,10 @@ async def handle_rpc(message: str) -> str:
         # --------------------------------------------------------------
         elif req["method"] == "execute":
             code = req["params"]["code"]
-            local_ns: dict = {}
-            # Execute user supplied code in the restricted environment.
-            exec(code, SAFE_GLOBALS, local_ns)
+
+            # Execute user supplied code
+            # NOTE: We know this is unsafe (for demo purposes right now)
+            exec(code)
 
             # If the script defines a variable called `result`, return it.
             response = {
