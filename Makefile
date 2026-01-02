@@ -23,9 +23,16 @@ lint-fix:
 	@echo "▶ Running ruff linting with auto-fix…"
 	@python3 -m ruff check --fix $(shell git ls-files "*.py" | grep -v __pycache__ | grep -v ".pytest_cache")
 
+test:
+	@echo "▶ Running pytest tests…"
+	@python3 -m pytest tests/ -v
+
+check: clean lint test $(ZIP_NAME)
+	@echo "✅ All checks passed: linting, testing, and build completed successfully."
+
 clean:
 	@rm -f $(ZIP_NAME) *.zip || true
 	@rm -rf tmp_pkg blender_rpc_ws || true
 	@echo "🧹 Cleaned up."
 
-.PHONY: all clean lint lint-fix
+.PHONY: all clean lint lint-fix test check
