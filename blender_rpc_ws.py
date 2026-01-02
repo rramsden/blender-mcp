@@ -63,57 +63,64 @@ async def handle_rpc(message: str) -> str:
         # 2️⃣ Core method – “execute”
         # --------------------------------------------------------------
         elif req["method"] == "execute":
-            code = req["params"]["code"]
+            raw_code = req["params"]["code"]
+            code = raw_code
             local_ns: dict = {}
 
-            # Capture stdout by redirecting it
+            # Capture stdout and stderr
             import io
-            import sys
+            import contextlib
 
-            old_stdout = sys.stdout
-            captured_output = io.StringIO()
-            sys.stdout = captured_output
-
-            try:
-                # Execute user supplied code
-                # NOTE: We know this is unsafe (for demo purposes right now)
-                exec(code, {}, local_ns)
-
-                # Get captured output
-                output = captured_output.getvalue()
-
-            finally:
-                # Restore stdout
-                sys.stdout = old_stdout
-
-            # Determine what to return as the RPC result.
-            # If the executed script defined a variable named `result`, use it.
-            # Otherwise fall back to the captured stdout (stripped of trailing newlines).
-            if local_ns.get("result") is None:
-                stripped = output.strip()
+            captured_stdout = io.StringIO()
+            captured_stderr = io.StringIO()
+            with (
+                contextlib.redirect_stdout(captured_stdout),
+                contextlib.redirect_stderr(captured_stderr),
+            ):
+                # Ensure bpy is available in the execution namespace
                 try:
-                    result_value = json.loads(stripped)
-                except Exception:
-                    result_value = stripped if stripped != "" else None
-            else:
-                result_value = local_ns.get("result")
+                    import bpy
 
-            # Optional debugging flag – if the request includes "debug": true, include extra info.
-            debug_info = {}
-            if isinstance(req, dict) and req.get("debug"):
+                    local_ns["bpy"] = bpy
+                except Exception:
+                    print("Failed to load 'bpy' module")
+                    pass
+                # Make sure bpy is available in the global namespace for list comprehensions
+                global_ns = {"__builtins__": __builtins__, "bpy": bpy} if "bpy" in locals() else {"__builtins__": __builtins__}
+                global_ns.update(local_ns)
+                exec(code, global_ns, local_ns)
+
+                output = captured_stdout.getvalue()
+                err_output = captured_stderr.getvalue()
+
+                # Determine what to return as the RPC result.
+                # Prefer a variable named `result` if present.
+                if "result" in local_ns:
+                    result_value = local_ns["result"]
+                else:
+                    # If no explicit result, try to parse stdout as JSON, else return raw stdout.
+                    stripped = output.strip()
+                    try:
+                        result_value = json.loads(stripped)
+                    except Exception:
+                        result_value = stripped if stripped != "" else None
+
+                # Optional debugging flag – include captured stdout, stderr, and any exception.
+                # Note: We cannot include 'locals' as it may contain non-serializable objects like modules
                 debug_info = {
                     "captured_stdout": output,
-                    "locals": local_ns,
+                    "captured_stderr": err_output,
+                    "locals": str(
+                        local_ns
+                    ),  # Convert to string to avoid JSON serialization issues
                 }
 
-            response = {
-                "jsonrpc": "2.0",
-                "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
-                "result": result_value,
-                "output": output,
-                "debug": debug_info,
-            }
-
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
+                    "result": result_value,
+                    "debug": {"output": output, "stderr": err_output, "info": debug_info},
+                }
         else:
             raise NotImplementedError(f"Method {req['method']} not supported")
 
