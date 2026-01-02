@@ -16,8 +16,8 @@ $(ZIP_NAME):
 	@echo "✅ $(ZIP_NAME) created."
 
 lint:
-	@echo "▶ Running flake8 linting…"
-	@python3 -m flake8 $(shell git ls-files "*.py" | grep -v __pycache__ | grep -v ".pytest_cache")
+	@echo "▶ Running ruff linting…"
+	@python3 -m ruff check $(shell git ls-files "*.py" | grep -v __pycache__ | grep -v ".pytest_cache")
 
 clean:
 	@rm -f $(ZIP_NAME) *.zip || true

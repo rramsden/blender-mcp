@@ -21,7 +21,7 @@ To check code style and linting issues, run:
 make lint
 ```
 
-Note: This project uses flake8 for linting. The linting target will check all Python files in the project. Some pre-existing linting issues may be present in the codebase, but the specific errors that were originally reported have been fixed.
+Note: This project uses ruff for linting. The linting target will check all Python files in the project. Some pre-existing linting issues may be present in the codebase, but the specific errors that were originally reported have been fixed.
 
 ## Usage
 

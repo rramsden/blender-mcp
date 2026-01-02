@@ -26,20 +26,20 @@ spec.loader.exec_module(_main)
 
 
 def register():
-    """Called by Blender when the add‑on is enabled.
+    """Called by Blender when the add-on is enabled.
     Starts the RPC server in a background thread and prints debug info.
     """
-    print("[blender‑rpc] Register called – starting WebSocket server…")
+    print("[blender-rpc] Register called – starting WebSocket server…")
     try:
         # start_ws_server blocks, so run it in a daemon thread
         t = threading.Thread(target=_main.start_ws_server, daemon=True)
         t.start()
-        print("[blender‑rpc] Server thread started.")
+        print("[blender-rpc] Server thread started.")
     except Exception as e:
         raise RuntimeError(f"Failed to start WS server: {e}")
 
 
 def unregister():
-    """Called by Blender when the add‑on is disabled."""
+    """Called by Blender when the add-on is disabled."""
     if hasattr(_main, "unregister"):
         _main.unregister()
