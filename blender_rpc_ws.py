@@ -26,7 +26,7 @@ except Exception:
 # ------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------
-HOST = "127.0.0.1"          # bind address; use "0.0.0.0" to listen on all interfaces
+HOST = "0.0.0.0"          # bind address; all interfaces
 PORT = 8765                 # TCP port for the WebSocket server
 ALLOWED_MODULES = {"bpy"}   # whitelist of modules that user code may import/use
 
@@ -68,19 +68,19 @@ async def handle_rpc(message: str) -> str:
         # --------------------------------------------------------------
         # 2️⃣ Core method – “execute”
         # --------------------------------------------------------------
-        elif req["method"] == "execute":
-            code = req["params"]["code"]
+elif req["method"] == "execute":
+             code = req["params"]["code"]
+             local_ns: dict = {}
+             # Execute user supplied code
+             # NOTE: We know this is unsafe (for demo purposes right now)
+             exec(code, {}, local_ns)
 
-            # Execute user supplied code
-            # NOTE: We know this is unsafe (for demo purposes right now)
-            exec(code)
-
-            # If the script defines a variable called `result`, return it.
-            response = {
-                "jsonrpc": "2.0",
-                "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
-                "result": local_ns.get("result")
-            }
+             # If the script defines a variable called `result`, return it.
+             response = {
+                 "jsonrpc": "2.0",
+                 "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
+                 "result": local_ns.get("result")
+             }
 
         else:
             raise NotImplementedError(f"Method {req['method']} not supported")
