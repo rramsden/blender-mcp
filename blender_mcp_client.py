@@ -61,7 +61,7 @@ async def run_command(command):
             response = await ws.recv()
             result = json.loads(response)
 
-            return result.get("result", "No result returned")
+            return result
 
     except Exception as e:
         return f"Error executing command: {e}"
