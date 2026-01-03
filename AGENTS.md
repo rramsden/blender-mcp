@@ -12,7 +12,7 @@ make
 
 This will:
 1. Create a clean build environment
-2. Package all necessary files into `blender_rpc_ws.zip`
+2. Package all necessary files into `blender_rpc_tcp.zip`
 3. Ensure proper structure for Blender add-on installation
 
 ## Verification

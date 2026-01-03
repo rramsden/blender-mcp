@@ -7,7 +7,7 @@ This repository contains a minimal example of how to control a local Blender ins
 You will need to build the package using the `Makefile` included in the repository.
 Run `make` to generate the the addon script for Blender.
 
-Once you have the addon installed and running you can control blender using `mcp_client.py` or another client that can communicate over WebSockets.
+Once you have the addon installed and running you can control blender using `mcp_client.py` or another client that can communicate over TCP.
 
 Here is an execution example:
 
