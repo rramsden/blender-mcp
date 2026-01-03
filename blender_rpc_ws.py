@@ -10,7 +10,7 @@
 #   # or run it from the Text Editor inside Blender.
 #
 # After start-up, connect to ws://127.0.0.1:8765  (or change HOST/PORT below).
-
+#
 import json
 import asyncio
 import traceback
@@ -86,9 +86,20 @@ async def handle_rpc(message: str) -> str:
                     print("Failed to load 'bpy' module")
                     pass
                 # Make sure bpy is available in the global namespace for list comprehensions
-                global_ns = {"__builtins__": __builtins__, "bpy": bpy} if "bpy" in locals() else {"__builtins__": __builtins__}
+                global_ns = (
+                    {"__builtins__": __builtins__, "bpy": bpy}
+                    if "bpy" in locals()
+                    else {"__builtins__": __builtins__}
+                )
                 global_ns.update(local_ns)
-                exec(code, global_ns, local_ns)
+                # Add basic error handling to prevent crashes
+                try:
+                    exec(code, global_ns, local_ns)
+                except Exception as e:
+                    # Log the exception for debugging purposes
+                    print(f"Error executing code: {e}")
+                    # Re-raise the exception so the error handling can catch it
+                    raise
 
                 output = captured_stdout.getvalue()
                 err_output = captured_stderr.getvalue()
@@ -117,15 +128,24 @@ async def handle_rpc(message: str) -> str:
 
                 response = {
                     "jsonrpc": "2.0",
-                    "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
+                    "id": (
+                        req["id"] if isinstance(req, dict) and "id" in req else None
+                    ),
                     "result": result_value,
-                    "debug": {"output": output, "stderr": err_output, "info": debug_info},
+                    "debug": {
+                        "output": output,
+                        "stderr": err_output,
+                        "info": debug_info,
+                    },
                 }
         else:
             raise NotImplementedError(f"Method {req['method']} not supported")
 
     except Exception as exc:
         # Build a JSON-RPC error object with traceback for debugging.
+        # Also print the error to console for immediate visibility
+        print(f"RPC Error: {exc}")
+        print(f"Traceback: {traceback.format_exc()}")
         response = {
             "jsonrpc": "2.0",
             "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
@@ -164,6 +184,13 @@ def start_ws_server():
     # Import websockets lazily; give a clear error if missing.
     try:
         import websockets  # noqa: F401
+
+        # Verify that the serve function is available
+        if not hasattr(websockets, "serve"):
+            raise RuntimeError(
+                "The 'websockets' package is installed but missing required 'serve' function. "
+                "Try: pip install --upgrade websockets"
+            )
     except Exception as e:
         raise RuntimeError(
             "The 'websockets' package is required to run the server. "
@@ -173,7 +200,10 @@ def start_ws_server():
     async def _start_server():
         # Create the server and store it in a global variable.
         global _ws_server
-        _ws_server = await websockets.serve(ws_handler, HOST, PORT)
+        # Make sure we're using the correct import path for serve
+        from websockets import serve as ws_serve
+
+        _ws_server = await ws_serve(ws_handler, HOST, PORT)
         print(f"[blender‑rpc] listening on ws://{HOST}:{PORT}")
         # Keep the coroutine alive while the event loop runs.
         await asyncio.Future()
