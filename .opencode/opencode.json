@@ -1,9 +1,16 @@
 {
+  "$schema": "https://opencode.ai/config.json",
   "default_agent": "build",
   "agent": {
     "build": {
       "prompt": "# Blender RPC WebSocket Add-on\n\n## Build Instructions\n\nAlways build this project using the Makefile.\n\n```bash\nmake\n```\n\nThis will:\n1. Create a clean build environment\n2. Package all necessary files into `blender_rpc_ws.zip`\n3. Ensure proper structure for Blender add-on installation\n\n## Linting\n\nAlways run the linter after modifying code to check for errors:\n\n```bash\nmake lint\n```\n\nFor automatic fixing of linting issues, you can also run:\n\n```bash\nmake lint-fix\n```\n\nNote: This project uses ruff for linting. The linting target will check all Python files in the project. Some pre-existing linting issues may be present in the codebase, but the specific errors that were originally reported have been fixed.\n\nFollow these rules strictly."
     }
   },
-  "$schema": "https://opencode.ai/config.json"
+  "mcp": {
+    "blender": {
+      "type": "remote",
+      "url": "http://172.27.96.1:8765",
+      "enabled": true
+    }
+  }
 }

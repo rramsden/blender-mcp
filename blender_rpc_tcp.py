@@ -1,19 +1,19 @@
 # blender_mcp_server.py -----------------------------------------------
 # A minimal MCP (Model Context Protocol) server that runs inside Blender.
-# Implements the MCP protocol over TCP using only Python stdlib.
+# Implements the MCP protocol over HTTP using only Python stdlib.
 #
 # MCP Methods:
 #   • initialize   - Handshake, returns server capabilities
 #   • tools/list   - Returns available tools
 #   • tools/call   - Executes a tool (e.g., execute_code)
 #
-# Install as a Blender add-on. Server listens on tcp://127.0.0.1:8765.
+# Install as a Blender add-on. Server listens on http://0.0.0.0:8765
 #
 import json
-import asyncio
 import traceback
 import threading
 import queue
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ------------------------------------------------------------------
 # Configuration
@@ -31,6 +31,7 @@ _running_in_blender = False
 # Check if we're running inside Blender
 try:
     import bpy
+
     _running_in_blender = hasattr(bpy, "app") and hasattr(bpy.app, "timers")
 except ImportError:
     _running_in_blender = False
@@ -66,13 +67,16 @@ def _run_code_sandboxed(code: str, bpy_module=None) -> dict:
     else:
         try:
             import bpy
+
             global_ns["bpy"] = local_ns["bpy"] = bpy
         except ImportError:
             pass
 
     try:
-        with contextlib.redirect_stdout(stdout_capture), \
-             contextlib.redirect_stderr(stderr_capture):
+        with (
+            contextlib.redirect_stdout(stdout_capture),
+            contextlib.redirect_stderr(stderr_capture),
+        ):
             exec(code, global_ns, local_ns)
 
         result["output"] = stdout_capture.getvalue()
@@ -137,6 +141,7 @@ def _ensure_timer_registered():
     global _timer_registered
     if not _timer_registered:
         import bpy
+
         if not bpy.app.timers.is_registered(_process_execution_queue):
             bpy.app.timers.register(_process_execution_queue, persistent=True)
             _timer_registered = True
@@ -151,20 +156,22 @@ SERVER_NAME = "blender-mcp"
 SERVER_VERSION = "0.1.0"
 
 # Tool definitions
-TOOLS = [{
-    "name": "execute_code",
-    "description": "Execute Python code in Blender's environment with access to the bpy module.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "code": {
-                "type": "string",
-                "description": "Python code to execute. Use 'result = ...' to return a value."
-            }
+TOOLS = [
+    {
+        "name": "execute_code",
+        "description": "Execute Python code in Blender's environment with access to the bpy module.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python code to execute. Use 'result = ...' to return a value.",
+                }
+            },
+            "required": ["code"],
         },
-        "required": ["code"]
     }
-}]
+]
 
 
 # ------------------------------------------------------------------
@@ -175,7 +182,7 @@ def _handle_initialize(params):
     return {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {"tools": {}},
-        "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}
+        "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
     }
 
 
@@ -184,8 +191,8 @@ def _handle_tools_list(params):
     return {"tools": TOOLS}
 
 
-async def _handle_tools_call(params):
-    """Execute a tool by name."""
+def _handle_tools_call_sync(params):
+    """Execute a tool by name (synchronous version for HTTP handler)."""
     tool_name = params.get("name")
     arguments = params.get("arguments", {})
 
@@ -196,16 +203,16 @@ async def _handle_tools_call(params):
 
     # Use main thread execution in Blender (bpy API is not thread-safe)
     if _running_in_blender and _timer_registered:
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, _execute_on_main_thread, code
-        )
+        result = _execute_on_main_thread(code)
     else:
         result = _execute_directly(code)
 
     if result["error"]:
         return {
-            "content": [{"type": "text", "text": f"Error: {result['error']['message']}"}],
-            "isError": True
+            "content": [
+                {"type": "text", "text": f"Error: {result['error']['message']}"}
+            ],
+            "isError": True,
         }
 
     # Format output
@@ -221,15 +228,18 @@ async def _handle_tools_call(params):
     return {"content": [{"type": "text", "text": text}]}
 
 
-# Method registry: name -> (handler, is_async)
+# Method registry
 _MCP_METHODS = {
-    "initialize": (_handle_initialize, False),
-    "tools/list": (_handle_tools_list, False),
-    "tools/call": (_handle_tools_call, True),
+    "initialize": _handle_initialize,
+    "tools/list": _handle_tools_list,
+    "tools/call": _handle_tools_call_sync,
 }
 
 
-async def handle_rpc(message: str) -> str | None:
+# ------------------------------------------------------------------
+# JSON-RPC Handler
+# ------------------------------------------------------------------
+def handle_rpc(message: str) -> str | None:
     """Parse JSON-RPC request, dispatch to MCP handler, return JSON response."""
     req = None
     try:
@@ -243,128 +253,165 @@ async def handle_rpc(message: str) -> str | None:
         if method not in _MCP_METHODS:
             raise NotImplementedError(f"Method '{method}' not supported")
 
-        handler, is_async = _MCP_METHODS[method]
+        handler = _MCP_METHODS[method]
         params = req.get("params", {})
-        result = await handler(params) if is_async else handler(params)
+        result = handler(params)
 
         response = {"jsonrpc": "2.0", "id": req["id"], "result": result}
 
+    except json.JSONDecodeError as exc:
+        print(f"MCP JSON Parse Error: {exc}")
+        response = {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32700, "message": "Parse error: " + str(exc)},
+        }
     except Exception as exc:
         print(f"MCP Error: {exc}")
         response = {
             "jsonrpc": "2.0",
             "id": req.get("id") if req else None,
-            "error": {"code": -32603, "message": str(exc)}
+            "error": {"code": -32603, "message": str(exc)},
         }
 
-    return json.dumps(response)
-
-
-# ------------------------------------------------------------------
-# TCP connection handler – line-delimited JSON.
-# ------------------------------------------------------------------
-async def tcp_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    while True:
-        try:
-            raw_msg = await reader.readline()
-            if not raw_msg:
-                break
-
-            message = raw_msg.decode("utf-8").strip()
-            reply = await handle_rpc(message)
-
-            # Notifications return None - no response needed
-            if reply is not None:
-                writer.write((reply + "\n").encode("utf-8"))
-                await writer.drain()
-
-        except Exception as e:
-            print(f"Error handling TCP connection: {e}")
-            break
-
-    writer.close()
-    await writer.wait_closed()
-
-
-# ------------------------------------------------------------------
-# Server bootstrap (runs in its own thread so Blender UI stays responsive).
-# ------------------------------------------------------------------
-def start_tcp_server():
-    """Start the TCP server in its own event loop.
-    The created ``_tcp_server`` and ``_tcp_loop`` globals are stored so that
-    :func:`stop_tcp_server` can shut them down when the add‑on is disabled.
-    """
-    global _tcp_server, _tcp_loop
-    _tcp_server = None
-    _tcp_loop = None
-
-    async def _start_server():
-        # Create the server and store it in a global variable.
-        global _tcp_server
-        _tcp_server = await asyncio.start_server(tcp_handler, HOST, PORT)
-        print(f"[blender‑rpc] listening on tcp://{HOST}:{PORT}")
-        # Keep the coroutine alive while the event loop runs.
-        await _tcp_server.serve_forever()
-
-    # Set up a dedicated event loop for the server (runs in this thread).
-    _tcp_loop = asyncio.new_event_loop()
-    loop = _tcp_loop  # Local reference for finally block
-    asyncio.set_event_loop(loop)
-    # Schedule the server start and then run the loop forever.
-    loop.create_task(_start_server())
     try:
-        loop.run_forever()
-    finally:
-        # Clean shutdown if the loop exits unexpectedly.
-        server = _tcp_server
-        if server is not None:
-            # Create a coroutine to close the server and wait for it
-            async def close_server():
-                server.close()
-                await server.wait_closed()
-
-            loop.run_until_complete(close_server())
-        loop.close()
-
-
-# ------------------------------------------------------------------
-# Server shutdown helper
-# ------------------------------------------------------------------
-def stop_tcp_server():
-    """Stop the running TCP server if it exists.
-    Called from the add‑on's ``unregister`` function.
-    """
-    global _tcp_server, _tcp_loop
-    if _tcp_server is None or _tcp_loop is None:
-        print("[blender‑rpc] No TCP server to stop.")
-        return
-    if not _tcp_loop.is_running():
-        print("[blender‑rpc] TCP server loop already stopped.")
-        return
-    # Close the server and stop the event loop safely.
-    server = _tcp_server
-    loop = _tcp_loop
-    _tcp_server = None
-    _tcp_loop = None
-
-    async def _shutdown():
-        if server is not None:
-            server.close()
-            await server.wait_closed()
-        loop.stop()
-
-    try:
-        # Schedule shutdown coroutine on the server's own loop.
-        asyncio.run_coroutine_threadsafe(_shutdown(), loop)
-        print("[blender‑rpc] TCP server stopped.")
+        return json.dumps(response)
     except Exception as e:
-        print(f"[blender‑rpc] Error stopping TCP server: {e}")
+        print(f"Error serializing response: {e}")
+        return json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": req.get("id") if req else None,
+                "error": {"code": -32603, "message": "Response serialization failed"},
+            }
+        )
 
 
+# ------------------------------------------------------------------
+# HTTP Handler for MCP Streamable HTTP transport
+# ------------------------------------------------------------------
+class MCPHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for MCP protocol."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):
+        """Override to prefix log messages."""
+        print(f"[blender-rpc HTTP] {args[0]}")
+
+    def _send_json_response(self, status_code: int, data: dict):
+        """Send a JSON response with proper headers."""
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_error_response(self, status_code: int, error_code: int, message: str):
+        """Send a JSON-RPC error response."""
+        self._send_json_response(
+            status_code,
+            {"jsonrpc": "2.0", "id": None, "error": {"code": error_code, "message": message}},
+        )
+
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests."""
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
+
+    def do_POST(self):
+        """Handle POST requests for MCP JSON-RPC."""
+        if self.path not in ("/", ""):
+            self._send_error_response(404, -32600, f"Not found: {self.path}")
+            return
+
+        # Read request body
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length == 0:
+            self._send_error_response(400, -32700, "Empty request body")
+            return
+
+        try:
+            body = self.rfile.read(content_length).decode("utf-8")
+        except Exception as e:
+            self._send_error_response(400, -32700, f"Failed to read request: {e}")
+            return
+
+        # Process the JSON-RPC request
+        try:
+            response = handle_rpc(body)
+            if response is not None:
+                self._send_json_response(200, json.loads(response))
+            else:
+                # Notification - no response needed, send 204
+                self.send_response(204)
+                self.end_headers()
+        except Exception as e:
+            print(f"[blender-rpc HTTP] Error processing request: {e}")
+            self._send_error_response(500, -32603, f"Internal error: {e}")
+
+    def do_GET(self):
+        """Handle GET requests - return server info."""
+        if self.path in ("/", ""):
+            self._send_json_response(
+                200,
+                {
+                    "name": SERVER_NAME,
+                    "version": SERVER_VERSION,
+                    "protocol": "MCP",
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "transport": "HTTP",
+                },
+            )
+        else:
+            self._send_error_response(404, -32600, f"Not found: {self.path}")
+
+
+# ------------------------------------------------------------------
+# HTTP Server startup/shutdown
+# ------------------------------------------------------------------
+_http_server = None
+
+
+def start_server():
+    """Start the HTTP server (blocking)."""
+    global _http_server
+    try:
+        _http_server = HTTPServer((HOST, PORT), MCPHTTPHandler)
+        print(f"[blender-rpc] HTTP server listening on http://{HOST}:{PORT}")
+        _http_server.serve_forever()
+    except Exception as e:
+        print(f"[blender-rpc] Failed to start HTTP server: {e}")
+
+
+def stop_server():
+    """Stop the HTTP server."""
+    global _http_server
+    if _http_server is not None:
+        _http_server.shutdown()
+        _http_server = None
+        print("[blender-rpc] HTTP server stopped.")
+
+
+# ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
 if __name__ == "__main__":
-    # Register the main thread executor timer first
-    _ensure_timer_registered()
-    # Run the server in the foreground (blocks until Ctrl‑C)
-    start_tcp_server()
+    # Register the main thread executor timer (only works in Blender)
+    if _running_in_blender:
+        _ensure_timer_registered()
+
+    # Run HTTP server (blocks until Ctrl-C)
+    try:
+        start_server()
+    except KeyboardInterrupt:
+        print("\n[blender-rpc] Shutting down...")
+        stop_server()
