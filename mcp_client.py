@@ -27,7 +27,6 @@ import json
 import websockets
 import sys
 import os
-import argparse
 
 
 def get_blender_host():
