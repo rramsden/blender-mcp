@@ -2,39 +2,36 @@
 import json
 import threading
 import time
-import socket
+import urllib.request
+import urllib.error
 
 import pytest
 
-from ..blender_rpc_tcp import start_tcp_server, stop_tcp_server, HOST, PORT
+from ..blender_rpc_http import start_server, stop_server, HOST, PORT
 
 
 def rpc_call(request: dict, timeout: int = 5) -> dict:
-    """Send a JSON-RPC request and return the parsed response."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(timeout)
-        sock.connect((HOST, PORT))
-        sock.send((json.dumps(request) + "\n").encode("utf-8"))
-
-        response = ""
-        while True:
-            chunk = sock.recv(1024).decode("utf-8")
-            if not chunk:
-                break
-            response += chunk
-            if "\n" in response:
-                break
-        return json.loads(response.strip())
+    """Send a JSON-RPC request over HTTP and return the parsed response."""
+    url = f"http://{HOST}:{PORT}/"
+    data = json.dumps(request).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 @pytest.fixture(scope="module")
 def run_server():
-    """Start the TCP server in a background thread for the duration of tests."""
-    t = threading.Thread(target=start_tcp_server, daemon=True)
+    """Start the HTTP server in a background thread for the duration of tests."""
+    t = threading.Thread(target=start_server, daemon=True)
     t.start()
     time.sleep(0.5)
     yield
-    stop_tcp_server()
+    stop_server()
 
 
 def test_initialize(run_server):
@@ -115,4 +112,4 @@ def test_server_shutdown(run_server):
     """Test that the server can be shut down properly."""
     resp = rpc_call({"jsonrpc": "2.0", "id": 99, "method": "initialize", "params": {}})
     assert resp["id"] == 99
-    stop_tcp_server()
+    stop_server()

@@ -1,8 +1,8 @@
 # Makefile – build the Blender add‑on zip
 # -------------------------------------------------
-ADDON_NAME := blender_rpc_tcp
+ADDON_NAME := blender_rpc_http
 ZIP_NAME   := $(ADDON_NAME).zip
-SRC_FILES  := __init__.py blender_rpc_tcp.py README.md mcp_client.py
+SRC_FILES  := __init__.py blender_rpc_http.py README.md mcp_client.py
 
 all: build
 
@@ -38,7 +38,7 @@ cubes:
 
 clean:
 	@rm -f $(ZIP_NAME) *.zip || true
-	@rm -rf tmp_pkg blender_rpc_tcp || true
+	@rm -rf tmp_pkg blender_rpc_http || true
 	@echo "🧹 Cleaned up."
 
 .PHONY: all clean lint lint-fix test check
