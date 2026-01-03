@@ -1,4 +1,4 @@
-# tests for blender_rpc_tcp server
+# tests for blender MCP server
 import json
 import threading
 import time
@@ -6,135 +6,113 @@ import socket
 
 import pytest
 
-# Import the server module (it will not start automatically)
 from ..blender_rpc_tcp import start_tcp_server, stop_tcp_server, HOST, PORT
+
+
+def rpc_call(request: dict, timeout: int = 5) -> dict:
+    """Send a JSON-RPC request and return the parsed response."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect((HOST, PORT))
+        sock.send((json.dumps(request) + "\n").encode("utf-8"))
+
+        response = ""
+        while True:
+            chunk = sock.recv(1024).decode("utf-8")
+            if not chunk:
+                break
+            response += chunk
+            if "\n" in response:
+                break
+        return json.loads(response.strip())
 
 
 @pytest.fixture(scope="module")
 def run_server():
     """Start the TCP server in a background thread for the duration of tests."""
-    # Launch server thread (daemon so it exits when process ends)
     t = threading.Thread(target=start_tcp_server, daemon=True)
     t.start()
-    # Give it a moment to bind
     time.sleep(0.5)
     yield
-    # Stop the server explicitly
     stop_tcp_server()
 
 
-def test_describe(run_server):
-    """Test the describe method via TCP connection."""
-    # Connect to the server
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    try:
-        sock.connect((HOST, PORT))
+def test_initialize(run_server):
+    """Test MCP initialize handshake."""
+    resp = rpc_call({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "test"}}
+    })
 
-        # Send describe request
-        req = {"jsonrpc": "2.0", "id": 1, "method": "describe", "params": {}}
-        sock.send((json.dumps(req) + "\n").encode("utf-8"))
-
-        # Receive response
-        response = ""
-        while True:
-            chunk = sock.recv(1024).decode("utf-8")
-            if not chunk:
-                break
-            response += chunk
-
-            # If we have a complete line, we're done
-            if "\n" in response:
-                response = response.strip()
-                break
-
-        sock.close()
-
-        resp = json.loads(response)
-        assert resp["id"] == 1
-        assert "methods" in resp["result"]
-        # ensure execute method is advertised
-        names = [m["name"] for m in resp["result"]["methods"]]
-        assert "execute" in names
-    except Exception as e:
-        sock.close()
-        raise e
+    assert resp["id"] == 1
+    assert resp["result"]["protocolVersion"] == "2024-11-05"
+    assert "serverInfo" in resp["result"]
+    assert resp["result"]["serverInfo"]["name"] == "blender-mcp"
 
 
-def test_execute_simple(run_server):
-    """Test the execute method via TCP connection."""
-    # Connect to the server
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    try:
-        sock.connect((HOST, PORT))
+def test_tools_list(run_server):
+    """Test MCP tools/list method."""
+    resp = rpc_call({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
 
-        # Send execute request
-        code = "result = 5 + 3"
-        req = {"jsonrpc": "2.0", "id": 2, "method": "execute", "params": {"code": code}}
-        sock.send((json.dumps(req) + "\n").encode("utf-8"))
+    assert resp["id"] == 2
+    tools = resp["result"]["tools"]
+    assert len(tools) >= 1
+    tool_names = [t["name"] for t in tools]
+    assert "execute_code" in tool_names
 
-        # Receive response
-        response = ""
-        while True:
-            chunk = sock.recv(1024).decode("utf-8")
-            if not chunk:
-                break
-            response += chunk
 
-            # If we have a complete line, we're done
-            if "\n" in response:
-                response = response.strip()
-                break
+def test_tools_call_execute_code(run_server):
+    """Test MCP tools/call with execute_code tool."""
+    resp = rpc_call({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "execute_code", "arguments": {"code": "result = 5 + 3"}}
+    })
 
-        sock.close()
+    assert resp["id"] == 3
+    content = resp["result"]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert "8" in content[0]["text"]
 
-        resp = json.loads(response)
-        assert resp["id"] == 2
-        assert resp["result"] == 8
-    except Exception as e:
-        sock.close()
-        raise e
+
+def test_tools_call_with_print(run_server):
+    """Test execute_code captures print output."""
+    resp = rpc_call({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "execute_code", "arguments": {"code": "print('hello world')"}}
+    })
+
+    assert resp["id"] == 4
+    text = resp["result"]["content"][0]["text"]
+    assert "hello world" in text
+
+
+def test_tools_call_error(run_server):
+    """Test execute_code handles errors."""
+    resp = rpc_call({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "execute_code", "arguments": {"code": "raise ValueError('test error')"}}
+    })
+
+    assert resp["id"] == 5
+    assert resp["result"]["isError"] is True
+    assert "test error" in resp["result"]["content"][0]["text"]
+
+
+def test_unknown_tool(run_server):
+    """Test calling unknown tool returns error."""
+    resp = rpc_call({
+        "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "unknown_tool", "arguments": {}}
+    })
+
+    assert resp["id"] == 6
+    assert "error" in resp
+    assert "unknown_tool" in resp["error"]["message"].lower()
 
 
 def test_server_shutdown(run_server):
     """Test that the server can be shut down properly."""
-    # First verify server is running by making a request
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    try:
-        sock.connect((HOST, PORT))
-
-        # Send describe request
-        req = {"jsonrpc": "2.0", "id": 3, "method": "describe", "params": {}}
-        sock.send((json.dumps(req) + "\n").encode("utf-8"))
-
-        # Receive response
-        response = ""
-        while True:
-            chunk = sock.recv(1024).decode("utf-8")
-            if not chunk:
-                break
-            response += chunk
-
-            # If we have a complete line, we're done
-            if "\n" in response:
-                response = response.strip()
-                break
-
-        sock.close()
-
-        resp = json.loads(response)
-        assert resp["id"] == 3
-
-        # Test that stop_tcp_server doesn't raise an exception
-        # (This test verifies the shutdown function exists and doesn't crash)
-        try:
-            stop_tcp_server()
-            # If we get here without exception, the test passes
-            assert True
-        except Exception:
-            pytest.fail("stop_tcp_server() raised an exception")
-    except Exception as e:
-        sock.close()
-        raise e
+    resp = rpc_call({"jsonrpc": "2.0", "id": 99, "method": "initialize", "params": {}})
+    assert resp["id"] == 99
+    stop_tcp_server()

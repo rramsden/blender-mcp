@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 """
-Blender MCP Client
-==================
+Blender MCP Client - Execute code in Blender via MCP protocol.
 
-This script implements an MCP (Message Control Protocol) client that can
-connect to a Blender RPC TCP server and execute arbitrary Python commands.
+Examples:
+    # Run a script file
+    python3 mcp_client.py examples/simple_cube.py
+    python3 mcp_client.py examples/100_cubes.py
 
-Usage:
-    python3 blender_mcp_client.py
+    # Pipe code directly
+    echo "import bpy; bpy.ops.mesh.primitive_cube_add()" | python3 mcp_client.py
 
-The client will:
-1. Connect to the Blender RPC server at tcp://172.27.96.1:8765
-2. Accept commands from stdin (one command per line) or from a file argument
-3. Execute the commands in Blender's Python environment
-4. Return the results to stdout
+    # Quick one-liner to create a sphere
+    echo "import bpy; bpy.ops.mesh.primitive_uv_sphere_add(radius=2, location=(0,0,3))" | python3 mcp_client.py
 
-Example usage:
-    echo "import bpy; bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))" |
-    python3 blender_mcp_client.py
+    # Get scene info
+    echo "import bpy; result = [o.name for o in bpy.data.objects]" | python3 mcp_client.py
 
-    python3 blender_mcp_client.py create_3d_cube_structure.py
+    # Clear scene
+    echo "import bpy; bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()" | python3 mcp_client.py
+
+Environment:
+    BLENDER_HOST - Server host (default: 172.27.96.1)
 """
 
 import json
@@ -27,79 +28,44 @@ import socket
 import sys
 import os
 
-
-def get_blender_host():
-    """
-    Get the Blender host IP address from environment variable
-    or default to localhost.
-    """
-    # Try to get host from environment variable
-    host = os.environ.get("BLENDER_HOST", "172.27.96.1")
-    if os.environ.get("DEBUG"):
-        print(f"[DEBUG] Using Blender host: {host}", file=sys.stderr)
-    return host
+HOST = os.environ.get("BLENDER_HOST", "172.27.96.1")
+PORT = 8765
 
 
-def run_command(command):
-    """Run a single command in Blender."""
-    host = get_blender_host()
-    port = 8765
+def rpc_call(method: str, params: dict) -> dict:
+    """Send JSON-RPC request to Blender MCP server."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(30)
+        sock.connect((HOST, PORT))
 
-    try:
-        # Create TCP socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)  # 10 second timeout
-        sock.connect((host, port))
+        request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        sock.send((json.dumps(request) + "\n").encode("utf-8"))
 
-        # Prepare and send the command
-        execute_request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "execute",
-            "params": {"code": command},
-        }
-
-        # Send the request followed by newline
-        sock.send((json.dumps(execute_request) + "\n").encode("utf-8"))
-
-        # Receive response
         response = ""
         while True:
-            chunk = sock.recv(1024).decode("utf-8")
+            chunk = sock.recv(4096).decode("utf-8")
             if not chunk:
                 break
             response += chunk
-
-            # If we have a complete line, we're done
             if "\n" in response:
-                response = response.strip()
                 break
 
-        sock.close()
+        return json.loads(response.strip())
 
-        if response:
-            result = json.loads(response)
-            return result
-        else:
-            return {"error": "No response received from server"}
 
-    except Exception as e:
-        return {"error": f"Error executing command: {e}"}
+def execute_code(code: str) -> dict:
+    """Execute Python code in Blender using MCP tools/call."""
+    return rpc_call("tools/call", {"name": "execute_code", "arguments": {"code": code}})
 
 
 def main():
-    """Main loop to read commands from stdin or file and execute them."""
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return
 
-    content = ""
-    if len(sys.argv) > 1:
-        filename = sys.argv[1]
-        with open(filename, "r") as f:
-            content = f.read()
-    else:
-        content = sys.stdin.read()
-
-    result = run_command(content)
-    print(json.dumps({"result": result}))
+    code = open(sys.argv[1]).read() if len(sys.argv) > 1 else sys.stdin.read()
+    result = execute_code(code)
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

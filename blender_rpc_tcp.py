@@ -1,15 +1,13 @@
-# blender_rpc_tcp.py -------------------------------------------------
-# A tiny JSON-RPC 2.0 TCP server that runs inside Blender.
-# It implements:
-#   • describe() – tells a client (OpenCode, any MCP client) what methods exist.
-#   • execute(code) – runs the supplied Python code in a sandbox that only
-#                     exposes the bpy module (you can extend the whitelist).
+# blender_mcp_server.py -----------------------------------------------
+# A minimal MCP (Model Context Protocol) server that runs inside Blender.
+# Implements the MCP protocol over TCP using only Python stdlib.
 #
-# Usage:
-#   blender --background -P /path/to/blender_rpc_tcp.py
-#   # or run it from the Text Editor inside Blender.
+# MCP Methods:
+#   • initialize   - Handshake, returns server capabilities
+#   • tools/list   - Returns available tools
+#   • tools/call   - Executes a tool (e.g., execute_code)
 #
-# After start-up, connect to tcp://127.0.0.1:8765  (or change HOST/PORT below).
+# Install as a Blender add-on. Server listens on tcp://127.0.0.1:8765.
 #
 import json
 import asyncio
@@ -20,14 +18,12 @@ import queue
 # ------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------
-HOST = "0.0.0.0"  # bind address; all interfaces
-PORT = 8765  # TCP port for the TCP server
-ALLOWED_MODULES = {"bpy"}  # whitelist of modules that user code may import/use
+HOST = "0.0.0.0"
+PORT = 8765
 
 # ------------------------------------------------------------------
 # Thread-safe execution queue for main thread execution
 # ------------------------------------------------------------------
-# Queue holds tuples of (code, result_event, result_holder)
 _execution_queue = queue.Queue()
 _timer_registered = False
 _running_in_blender = False
@@ -40,133 +36,99 @@ except ImportError:
     _running_in_blender = False
 
 
-def _execute_directly(code: str) -> dict:
+# ------------------------------------------------------------------
+# Shared code execution helper
+# ------------------------------------------------------------------
+def _run_code_sandboxed(code: str, bpy_module=None) -> dict:
     """
-    Execute code directly (used when not running inside Blender).
+    Execute code in a sandboxed namespace with stdout/stderr capture.
+
+    Args:
+        code: Python code to execute
+        bpy_module: Optional bpy module to inject (None = try to import)
+
+    Returns:
+        Dict with keys: result, error, output, stderr
     """
     import io
     import contextlib
 
-    result_holder = {"result": None, "error": None, "output": "", "stderr": ""}
-    captured_stdout = io.StringIO()
-    captured_stderr = io.StringIO()
-    local_ns: dict = {}
+    result = {"result": None, "error": None, "output": "", "stderr": ""}
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+
+    # Build namespace
+    global_ns = {"__builtins__": __builtins__}
+    local_ns = {}
+
+    if bpy_module is not None:
+        global_ns["bpy"] = local_ns["bpy"] = bpy_module
+    else:
+        try:
+            import bpy
+            global_ns["bpy"] = local_ns["bpy"] = bpy
+        except ImportError:
+            pass
 
     try:
-        with (
-            contextlib.redirect_stdout(captured_stdout),
-            contextlib.redirect_stderr(captured_stderr),
-        ):
-            global_ns = {"__builtins__": __builtins__}
-            # Try to add bpy if available
-            try:
-                import bpy
-                global_ns["bpy"] = bpy
-                local_ns["bpy"] = bpy
-            except ImportError:
-                pass
-            global_ns.update(local_ns)
+        with contextlib.redirect_stdout(stdout_capture), \
+             contextlib.redirect_stderr(stderr_capture):
             exec(code, global_ns, local_ns)
 
-        result_holder["output"] = captured_stdout.getvalue()
-        result_holder["stderr"] = captured_stderr.getvalue()
+        result["output"] = stdout_capture.getvalue()
+        result["stderr"] = stderr_capture.getvalue()
 
+        # Extract result: explicit 'result' variable, or parse stdout as JSON, or raw output
         if "result" in local_ns:
-            result_holder["result"] = local_ns["result"]
+            result["result"] = local_ns["result"]
         else:
-            stripped = result_holder["output"].strip()
+            stripped = result["output"].strip()
             try:
-                result_holder["result"] = json.loads(stripped)
+                result["result"] = json.loads(stripped)
             except Exception:
-                result_holder["result"] = stripped if stripped else None
+                result["result"] = stripped if stripped else None
 
     except Exception as exc:
-        result_holder["error"] = {
-            "message": str(exc),
-            "traceback": traceback.format_exc(),
-        }
-        result_holder["output"] = captured_stdout.getvalue()
-        result_holder["stderr"] = captured_stderr.getvalue()
+        result["error"] = {"message": str(exc), "traceback": traceback.format_exc()}
+        result["output"] = stdout_capture.getvalue()
+        result["stderr"] = stderr_capture.getvalue()
 
-    return result_holder
+    return result
+
+
+def _execute_directly(code: str) -> dict:
+    """Execute code directly (used when not running inside Blender)."""
+    return _run_code_sandboxed(code)
 
 
 def _execute_on_main_thread(code: str) -> dict:
     """
     Queue code for execution on Blender's main thread and wait for result.
-    This is thread-safe and can be called from any thread.
+    Thread-safe and can be called from any thread.
     """
     result_holder = {"result": None, "error": None, "output": "", "stderr": ""}
     result_event = threading.Event()
-
     _execution_queue.put((code, result_event, result_holder))
-
-    # Wait for the main thread to process the request
-    result_event.wait(timeout=300)  # 5 minute timeout for long operations
-
+    result_event.wait(timeout=300)  # 5 minute timeout
     return result_holder
 
 
 def _process_execution_queue() -> float:
     """
-    Timer callback that runs on Blender's main thread.
-    Processes pending code execution requests from the queue.
-    Returns the interval until next call (0.01 seconds).
+    Timer callback on Blender's main thread. Processes pending code requests.
+    Returns interval until next call (0.01 seconds).
     """
     import bpy
-    import io
-    import contextlib
 
     try:
-        # Process one item from the queue (non-blocking)
         code, result_event, result_holder = _execution_queue.get_nowait()
     except queue.Empty:
-        # No work to do, check again soon
         return 0.01
 
-    # Execute the code on the main thread
-    captured_stdout = io.StringIO()
-    captured_stderr = io.StringIO()
-    local_ns: dict = {}
-
-    try:
-        with (
-            contextlib.redirect_stdout(captured_stdout),
-            contextlib.redirect_stderr(captured_stderr),
-        ):
-            # Set up namespace with bpy
-            global_ns = {"__builtins__": __builtins__, "bpy": bpy}
-            local_ns["bpy"] = bpy
-            global_ns.update(local_ns)
-
-            # Execute the code
-            exec(code, global_ns, local_ns)
-
-        result_holder["output"] = captured_stdout.getvalue()
-        result_holder["stderr"] = captured_stderr.getvalue()
-
-        # Determine result value
-        if "result" in local_ns:
-            result_holder["result"] = local_ns["result"]
-        else:
-            stripped = result_holder["output"].strip()
-            try:
-                result_holder["result"] = json.loads(stripped)
-            except Exception:
-                result_holder["result"] = stripped if stripped else None
-
-    except Exception as exc:
-        result_holder["error"] = {
-            "message": str(exc),
-            "traceback": traceback.format_exc(),
-        }
-        result_holder["output"] = captured_stdout.getvalue()
-        result_holder["stderr"] = captured_stderr.getvalue()
-
-    # Signal that execution is complete
+    # Run code and copy results into the shared holder
+    exec_result = _run_code_sandboxed(code, bpy_module=bpy)
+    result_holder.update(exec_result)
     result_event.set()
-
-    # Continue processing queue
     return 0.01
 
 
@@ -182,94 +144,117 @@ def _ensure_timer_registered():
 
 
 # ------------------------------------------------------------------
-# JSON-RPC dispatcher
+# MCP Protocol Constants
 # ------------------------------------------------------------------
-async def handle_rpc(message: str) -> str:
-    """
-    Parse a single line of JSON-RPC, execute the requested method,
-    and return a JSON string (without trailing newline).
-    """
-    req = None  # ensure variable exists for error handling
+PROTOCOL_VERSION = "2024-11-05"
+SERVER_NAME = "blender-mcp"
+SERVER_VERSION = "0.1.0"
+
+# Tool definitions
+TOOLS = [{
+    "name": "execute_code",
+    "description": "Execute Python code in Blender's environment with access to the bpy module.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Python code to execute. Use 'result = ...' to return a value."
+            }
+        },
+        "required": ["code"]
+    }
+}]
+
+
+# ------------------------------------------------------------------
+# MCP Method Handlers
+# ------------------------------------------------------------------
+def _handle_initialize(params):
+    """MCP initialize handshake."""
+    return {
+        "protocolVersion": PROTOCOL_VERSION,
+        "capabilities": {"tools": {}},
+        "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}
+    }
+
+
+def _handle_tools_list(params):
+    """Return available tools."""
+    return {"tools": TOOLS}
+
+
+async def _handle_tools_call(params):
+    """Execute a tool by name."""
+    tool_name = params.get("name")
+    arguments = params.get("arguments", {})
+
+    if tool_name != "execute_code":
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+    code = arguments.get("code", "")
+
+    # Use main thread execution in Blender (bpy API is not thread-safe)
+    if _running_in_blender and _timer_registered:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, _execute_on_main_thread, code
+        )
+    else:
+        result = _execute_directly(code)
+
+    if result["error"]:
+        return {
+            "content": [{"type": "text", "text": f"Error: {result['error']['message']}"}],
+            "isError": True
+        }
+
+    # Format output
+    output_parts = []
+    if result["result"] is not None:
+        output_parts.append(f"Result: {json.dumps(result['result'])}")
+    if result["output"]:
+        output_parts.append(f"Output:\n{result['output']}")
+    if result["stderr"]:
+        output_parts.append(f"Stderr:\n{result['stderr']}")
+
+    text = "\n".join(output_parts) if output_parts else "Code executed successfully."
+    return {"content": [{"type": "text", "text": text}]}
+
+
+# Method registry: name -> (handler, is_async)
+_MCP_METHODS = {
+    "initialize": (_handle_initialize, False),
+    "tools/list": (_handle_tools_list, False),
+    "tools/call": (_handle_tools_call, True),
+}
+
+
+async def handle_rpc(message: str) -> str | None:
+    """Parse JSON-RPC request, dispatch to MCP handler, return JSON response."""
+    req = None
     try:
         req = json.loads(message)
+        method = req.get("method")
 
-        # --------------------------------------------------------------
-        # 1️⃣ Handshake – “describe”
-        # --------------------------------------------------------------
-        if req["method"] == "describe":
-            response = {
-                "jsonrpc": "2.0",
-                "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
-                "result": {
-                    "name": "Blender RPC",
-                    "version": "0.1",
-                    "methods": [
-                        {
-                            "name": "execute",
-                            "description": (
-                                "Run arbitrary Python code that can use the bpy module."
-                            ),
-                            "params": {"code": "string"},
-                            "returns": "any JSON-serialisable value",
-                        }
-                    ],
-                },
-            }
+        # Notifications (no id) don't get responses
+        if "id" not in req:
+            return None
 
-        # --------------------------------------------------------------
-        # 2️⃣ Core method – "execute"
-        # --------------------------------------------------------------
-        elif req["method"] == "execute":
-            raw_code = req["params"]["code"]
+        if method not in _MCP_METHODS:
+            raise NotImplementedError(f"Method '{method}' not supported")
 
-            # Choose execution method based on environment
-            # When running inside Blender, use main thread execution to avoid crashes
-            # (Blender's bpy API is not thread-safe)
-            if _running_in_blender and _timer_registered:
-                exec_result = await asyncio.get_event_loop().run_in_executor(
-                    None, _execute_on_main_thread, raw_code
-                )
-            else:
-                # Direct execution for tests or non-Blender environments
-                exec_result = _execute_directly(raw_code)
+        handler, is_async = _MCP_METHODS[method]
+        params = req.get("params", {})
+        result = await handler(params) if is_async else handler(params)
 
-            # Check for execution errors
-            if exec_result["error"]:
-                raise Exception(
-                    f"{exec_result['error']['message']}\n{exec_result['error']['traceback']}"
-                )
-
-            result_value = exec_result["result"]
-            output = exec_result["output"]
-            err_output = exec_result["stderr"]
-
-            response = {
-                "jsonrpc": "2.0",
-                "id": (
-                    req["id"] if isinstance(req, dict) and "id" in req else None
-                ),
-                "result": result_value,
-                "debug": {
-                    "output": output,
-                    "stderr": err_output,
-                },
-            }
-        else:
-            raise NotImplementedError(f"Method {req['method']} not supported")
+        response = {"jsonrpc": "2.0", "id": req["id"], "result": result}
 
     except Exception as exc:
-        # Build a JSON-RPC error object with traceback for debugging.
-        # Also print the error to console for immediate visibility
-        print(f"RPC Error: {exc}")
-        print(f"Traceback: {traceback.format_exc()}")
+        print(f"MCP Error: {exc}")
         response = {
             "jsonrpc": "2.0",
-            "id": (req["id"] if isinstance(req, dict) and "id" in req else None),
-            "error": {
-                "code": -32603,  # Internal error
-                "message": str(exc),
-                "data": traceback.format_exc(),
-            },
+            "id": req.get("id") if req else None,
+            "error": {"code": -32603, "message": str(exc)}
         }
 
     return json.dumps(response)
@@ -281,26 +266,22 @@ async def handle_rpc(message: str) -> str:
 async def tcp_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     while True:
         try:
-            # Read a line of data from the client
             raw_msg = await reader.readline()
             if not raw_msg:
                 break
 
-            # Decode the message
             message = raw_msg.decode("utf-8").strip()
-
-            # Handle the RPC request
             reply = await handle_rpc(message)
 
-            # Send the response back to the client
-            writer.write((reply + "\n").encode("utf-8"))
-            await writer.drain()
+            # Notifications return None - no response needed
+            if reply is not None:
+                writer.write((reply + "\n").encode("utf-8"))
+                await writer.drain()
 
         except Exception as e:
             print(f"Error handling TCP connection: {e}")
             break
 
-    # Close the connection
     writer.close()
     await writer.wait_closed()
 
