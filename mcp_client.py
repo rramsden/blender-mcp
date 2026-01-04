@@ -1,56 +1,44 @@
 #!/usr/bin/env python3
 """
 Blender MCP Client - Execute code in Blender via MCP protocol.
-
-Examples:
-    # Run a script file
-    python3 mcp_client.py examples/simple_cube.py
-    python3 mcp_client.py examples/100_cubes.py
-
-    # Pipe code directly
-    echo "import bpy; bpy.ops.mesh.primitive_cube_add()" | python3 mcp_client.py
-
-    # Quick one-liner to create a sphere
-    echo "import bpy; bpy.ops.mesh.primitive_uv_sphere_add(radius=2, location=(0,0,3))" | python3 mcp_client.py
-
-    # Get scene info
-    echo "import bpy; result = [o.name for o in bpy.data.objects]" | python3 mcp_client.py
-
-    # Clear scene
-    echo "import bpy; bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()" | python3 mcp_client.py
-
-Environment:
-    BLENDER_HOST - Server host (default: 172.27.96.1)
 """
 
 import json
-import socket
 import sys
 import os
+import requests
 
-HOST = os.environ.get("BLENDER_HOST", "172.27.96.1")
-PORT = 8765
+HOST = os.environ.get("BLENDER_HOST", "127.0.0.1")
+PORT = int(os.environ.get("BLENDER_PORT", "8765"))
+BASE_URL = f"http://{HOST}:{PORT}"
 
 
 def rpc_call(method: str, params: dict) -> dict:
-    """Send JSON-RPC request to Blender MCP server."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(30)
-        sock.connect((HOST, PORT))
+    """Send JSON-RPC request to Blender MCP server via HTTP."""
+    request_data = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    request_json = json.dumps(request_data)
 
-        request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-        sock.send((json.dumps(request) + "\n").encode("utf-8"))
-
-        response = ""
-        while True:
-            chunk = sock.recv(4096).decode("utf-8")
-            if not chunk:
-                break
-            response += chunk
-            if "\n" in response:
-                break
-
-        return json.loads(response.strip())
+    try:
+        # Send request and get response
+        response = requests.post(
+            BASE_URL,
+            data=request_json,
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.HTTPError as e:
+        # Handle HTTP errors
+        try:
+            error_json = e.response.json()
+            raise Exception(
+                f"HTTP Error {e.response.status_code}: {error_json.get('error', {}).get('message', 'Unknown error')}"
+            )
+        except json.JSONDecodeError:
+            raise Exception(f"HTTP Error {e.response.status_code}: {e.response.text}")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Connection Error: {str(e)}")
 
 
 def execute_code(code: str) -> dict:
